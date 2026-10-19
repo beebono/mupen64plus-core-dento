@@ -84,7 +84,9 @@ void poweron_r4300(struct r4300_core* r4300)
     /* recomp init */
 #ifndef NEW_DYNAREC
     r4300->recomp.delay_slot_compiled = 0;
-    r4300->recomp.fast_memory = 1;
+    /* Slow RDRAM path until IPL3's current calibration ends (rdram.c re-enables it): blocks compiled with
+     * fast_memory miss map_corrupt_rdram and break games such as Indiana Jones and Excitebike 64. */
+    r4300->recomp.fast_memory = 0;
     r4300->recomp.local_rs = 0;
     r4300->recomp.dyna_interp = 0;
     r4300->recomp.jumps_table = NULL;
