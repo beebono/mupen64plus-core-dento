@@ -133,9 +133,97 @@ static void EmptyFunc(void)
 {
 }
 
+#ifdef M64P_STATIC_PLUGINS
+/* Built-in plugin table: the plugins are linked into the executable with a
+ * per-plugin symbol prefix (foir_, altru_, suxty_, armlet_) and resolved here
+ * by name instead of through dlsym().  The handle passed to CoreAttachPlugin()
+ * is a pointer to the table entry.  Symbols a plugin does not define resolve
+ * to NULL (weak), which is how the optional entry points are detected. */
+#ifndef M64P_STATIC_GFX_PREFIX
+#define M64P_STATIC_GFX_PREFIX foir
+#endif
+#ifndef M64P_STATIC_AUDIO_PREFIX
+#define M64P_STATIC_AUDIO_PREFIX altru
+#endif
+#ifndef M64P_STATIC_INPUT_PREFIX
+#define M64P_STATIC_INPUT_PREFIX suxty
+#endif
+#ifndef M64P_STATIC_RSP_PREFIX
+#define M64P_STATIC_RSP_PREFIX armlet
+#endif
+
+#define SP_COMMON(P, X) X(P, PluginStartup) X(P, PluginShutdown) X(P, PluginGetVersion) \
+                        X(P, RomOpen) X(P, RomClosed)
+#define SP_GFX(P, X) SP_COMMON(P, X) \
+    X(P, ChangeWindow) X(P, InitiateGFX) X(P, MoveScreen) X(P, ProcessDList) X(P, ProcessRDPList) \
+    X(P, ShowCFB) X(P, UpdateScreen) X(P, ViStatusChanged) X(P, ViWidthChanged) X(P, ReadScreen2) \
+    X(P, SetRenderingCallback) X(P, ResizeVideoOutput) X(P, FBRead) X(P, FBWrite) \
+    X(P, FBGetFrameBufferInfo)
+#define SP_AUDIO(P, X) SP_COMMON(P, X) \
+    X(P, AiDacrateChanged) X(P, AiLenChanged) X(P, InitiateAudio) X(P, ProcessAList) \
+    X(P, SetSpeedFactor) X(P, VolumeUp) X(P, VolumeDown) X(P, VolumeGetLevel) \
+    X(P, VolumeSetLevel) X(P, VolumeMute) X(P, VolumeGetString)
+#define SP_INPUT(P, X) SP_COMMON(P, X) \
+    X(P, ControllerCommand) X(P, GetKeys) X(P, InitiateControllers) X(P, ReadController) \
+    X(P, SDL_KeyDown) X(P, SDL_KeyUp) X(P, SendVRUWord) X(P, SetMicState) X(P, ReadVRUResults) \
+    X(P, ClearVRUWords) X(P, SetVRUWordMask) X(P, RenderCallback)
+#define SP_RSP(P, X) SP_COMMON(P, X) \
+    X(P, DoRspCycles) X(P, InitiateRSP)
+
+#define SP_DECL(P, N) extern __typeof__(*(ptr_##N)0) P##_##N __attribute__((weak));
+#define SP_ENT(P, N) { #N, (void (*)(void))&P##_##N },
+#define SP_DECL_X(P, N) SP_DECL(P, N)
+#define SP_ENT_X(P, N) SP_ENT(P, N)
+
+SP_GFX(M64P_STATIC_GFX_PREFIX, SP_DECL_X)
+SP_AUDIO(M64P_STATIC_AUDIO_PREFIX, SP_DECL_X)
+SP_INPUT(M64P_STATIC_INPUT_PREFIX, SP_DECL_X)
+SP_RSP(M64P_STATIC_RSP_PREFIX, SP_DECL_X)
+
+typedef struct { const char *name; void (*fn)(void); } static_sym;
+typedef struct { m64p_plugin_type type; const static_sym *syms; } static_plugin;
+
+static const static_sym l_gfx_syms[]   = { SP_GFX(M64P_STATIC_GFX_PREFIX, SP_ENT_X) { NULL, NULL } };
+static const static_sym l_audio_syms[] = { SP_AUDIO(M64P_STATIC_AUDIO_PREFIX, SP_ENT_X) { NULL, NULL } };
+static const static_sym l_input_syms[] = { SP_INPUT(M64P_STATIC_INPUT_PREFIX, SP_ENT_X) { NULL, NULL } };
+static const static_sym l_rsp_syms[]   = { SP_RSP(M64P_STATIC_RSP_PREFIX, SP_ENT_X) { NULL, NULL } };
+
+static const static_plugin l_static_plugins[] = {
+    { M64PLUGIN_GFX,   l_gfx_syms },
+    { M64PLUGIN_AUDIO, l_audio_syms },
+    { M64PLUGIN_INPUT, l_input_syms },
+    { M64PLUGIN_RSP,   l_rsp_syms },
+};
+
+EXPORT m64p_dynlib_handle CALL CoreStaticPluginHandle(m64p_plugin_type type)
+{
+    unsigned i;
+    for (i = 0; i < sizeof(l_static_plugins) / sizeof(l_static_plugins[0]); i++)
+        if (l_static_plugins[i].type == type)
+            return (m64p_dynlib_handle)&l_static_plugins[i];
+    return NULL;
+}
+
+EXPORT m64p_function CALL CoreStaticPluginGetProc(m64p_dynlib_handle handle, const char *name)
+{
+    const static_plugin *pl = (const static_plugin *)handle;
+    const static_sym *s;
+    if (pl == NULL || name == NULL)
+        return NULL;
+    for (s = pl->syms; s->name != NULL; s++)
+        if (strcmp(s->name, name) == 0)
+            return (m64p_function)s->fn;
+    return NULL;
+}
+
+#define PLUGIN_GETPROC(h, n) CoreStaticPluginGetProc((h), (n))
+#else
+#define PLUGIN_GETPROC(h, n) osal_dynlib_getproc((h), (n))
+#endif
+
 // Handy macro to avoid code bloat when loading symbols
 #define GET_FUNC(type, field, name) \
-    ((field = (type)osal_dynlib_getproc(plugin_handle, name)) != NULL)
+    ((field = (type)PLUGIN_GETPROC(plugin_handle, name)) != NULL)
 
 // code to handle backwards-compatibility to video plugins with API_VERSION < 02.1.0.  This API version introduced a boolean
 // flag in the rendering callback, which told the core whether or not the current screen has been freshly redrawn since the
@@ -197,7 +285,7 @@ static m64p_error plugin_connect_gfx(m64p_dynlib_handle plugin_handle)
         }
 
         /* set function pointers for optional functions */
-        gfx.resizeVideoOutput = (ptr_ResizeVideoOutput)osal_dynlib_getproc(plugin_handle, "ResizeVideoOutput");
+        gfx.resizeVideoOutput = (ptr_ResizeVideoOutput)PLUGIN_GETPROC(plugin_handle, "ResizeVideoOutput");
 
         /* check the version info */
         (*gfx.getVersion)(&PluginType, &PluginVersion, &APIVersion, NULL, NULL);

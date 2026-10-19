@@ -850,7 +850,7 @@ uninstall:
 	$(RM) "$(DESTDIR)$(SHAREDIR)/mupencheat.txt"
 
 clean:
-	$(RM) -r _obj $(OBJDIR) $(TARGET) $(SONAME) $(SRCDIR)/asm_defines/asm_defines_*.h
+	$(RM) -r _obj $(OBJDIR) $(TARGET) libmupen64plus-static.a libmupen64plus.a $(SONAME) $(SRCDIR)/asm_defines/asm_defines_*.h
 
 # build dependency files
 CFLAGS += -MD -MP
@@ -892,4 +892,26 @@ $(TARGET): $(OBJECTS)
 	$(LINK.o) $^ $(LOADLIBES) $(LDLIBS) -o $@
 	if [ "$(SONAME)" != "" ]; then ln -sf $@ $(SONAME); fi
 
-.PHONY: all clean install uninstall targets
+# static bundle: libmupen64plus.a with the built-in plugin table (src/plugin/plugin.c).
+# "make static" re-invokes make with POSTFIX=-static (own object dir) and M64P_STATIC=1,
+# then copies the archive to libmupen64plus.a.  Pass OPTFLAGS="-O3" for a non-LTO archive.
+# The libraries the final link needs are printed by "make static-ldlibs".
+ifeq ($(M64P_STATIC),1)
+  CFLAGS += -DM64P_STATIC_PLUGINS
+endif
+STATIC_TARGET = libmupen64plus$(POSTFIX).a
+STATIC_OBJECTS = $(filter-out $(ASM_DEFINES_OBJ),$(OBJECTS))
+
+static:
+	$(MAKE) M64P_STATIC=1 POSTFIX=-static libmupen64plus-static.a
+	cp libmupen64plus-static.a libmupen64plus.a
+
+libmupen64plus-static.a: $(STATIC_OBJECTS)
+	@echo '    AR  '$@
+	@$(RM) $@
+	@$(if $(AR_LTO),$(CROSS_COMPILE)$(AR_LTO),$(AR)) rcs $@ $^
+
+static-ldlibs:
+	@echo $(LDLIBS)
+
+.PHONY: all clean install uninstall targets static static-ldlibs
