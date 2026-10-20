@@ -103,6 +103,8 @@ Registers are made available using a least-soon-needed replacement policy.  When
 
 After the initial register allocation, the allocations are reviewed to determine if any registers remain allocated longer than necessary.  These are then removed from the register cache.  This avoids having to write back a large number of registers just before a branch, and makes more registers available for the next pass.
 
+Compile time: the lookups in this pass and in pass 3 that do not depend on the host register being examined (<code>get_reg</code> over the 29 host registers) are done once per instruction instead of once per register, and the load/store pre-allocation scan memoizes <code>count_free_regs</code> per instruction. These were about a quarter of the compile samples; the emitted code is byte-identical.
+
 ==Pass 5: Pre-allocate registers==
 
 If a register will be used soon and needs to be loaded, try to load it early if the register is available.  This improves execution on CPUs with a load-use penalty.
