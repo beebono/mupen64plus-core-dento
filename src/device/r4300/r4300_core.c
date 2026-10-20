@@ -425,6 +425,16 @@ void invalidate_r4300_cached_code(struct r4300_core* r4300, uint32_t address, si
 }
 
 
+void r4300_note_rdram_write(struct r4300_core* r4300, uint32_t rdram_offset, size_t size)
+{
+#ifdef NEW_DYNAREC
+    if (r4300->emumode == EMUMODE_DYNAREC)
+        new_dynarec_rdram_written(rdram_offset, size);
+#else
+    (void)r4300; (void)rdram_offset; (void)size;
+#endif
+}
+
 void generic_jump_to(struct r4300_core* r4300, uint32_t address)
 {
     switch(r4300->emumode)

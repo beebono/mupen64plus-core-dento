@@ -114,6 +114,7 @@ static void dma_pi_write(struct pi_controller* pi)
     unsigned int cycles = handler->dma_write(opaque, dram, dram_addr, cart_addr, length);
 
     post_framebuffer_write(&pi->dp->fb, dram_addr, length);
+    r4300_note_rdram_write(pi->mi->r4300, dram_addr & 0x7fffff, length);
 
     /* Mark DMA as busy */
     pi->regs[PI_STATUS_REG] |= PI_STATUS_DMA_BUSY;

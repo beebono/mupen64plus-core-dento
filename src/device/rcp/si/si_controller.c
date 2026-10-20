@@ -68,6 +68,7 @@ static void copy_pif_rdram(struct si_controller* si)
         for(i = 0; i < (PIF_RAM_SIZE / 4); ++i) {
             dram[i] = tohl(pif_ram[i]);
         }
+        r4300_note_rdram_write(si->mi->r4300, dram_addr & 0x7fffff, PIF_RAM_SIZE);
     }
 }
 

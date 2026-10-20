@@ -296,6 +296,10 @@ struct ll_entry
   u_int reg32;
   u_int start;
   u_int length;
+  u_int verified_gen; // stamp (inv_gen) of the last successful verify_dirty, 0 if none
+  u_short verified_first; // RDRAM pages (4K) the verified block lives in
+  u_short verified_last;
+  u_char verified_tlb; // reached through the TLB: the mapping must be unchanged too
 };
 
 /* linkage */
@@ -385,6 +389,24 @@ static struct ll_entry *jump_in[4096];
 static struct ll_entry *jump_dirty[4096];
 static struct ll_entry *jump_out[4096];
 static unsigned char restore_candidate[512];
+
+// A dirty block that verified identical to its copy stays verified until one of the RDRAM pages it lives in is
+// invalidated (invalidate_block, which every trapped store or cache-invalidating DMA goes through) or, for a
+// block reached through the TLB, until the TLB changes. Stamps are taken from one counter; a block is still
+// verified if every relevant stamp is <= the counter value it was verified at.
+static u_int inv_gen=1;
+static u_int page_inv_gen[2048]; // last invalidation of each RDRAM page
+static u_int tlb_inv_gen; // last invalidation of a TLB-mapped page or write to the TLB
+
+static void stamp_page_invalidated(u_int page)
+{
+  if(page<2048) page_inv_gen[page]=++inv_gen;
+}
+
+static void stamp_tlb_changed(void)
+{
+  tlb_inv_gen=++inv_gen;
+}
 
 #if COUNT_NOTCOMPILEDS
 static int notcompiledCount = 0;
@@ -2008,6 +2030,7 @@ void* ERET_new(void)
 
 static void TLBWI_new(int pcaddr, int count)
 {
+  stamp_tlb_changed();
   unsigned int i;
   UPDATE_COUNT_IN
   state->pcaddr = pcaddr;
@@ -2086,6 +2109,7 @@ static void TLBWI_new(int pcaddr, int count)
 
 static void TLBWR_new(int pcaddr, int count)
 {
+  stamp_tlb_changed();
   unsigned int i;
   UPDATE_COUNT_IN
   state->pcaddr = pcaddr;
@@ -2448,7 +2472,8 @@ static void tlb_speed_hacks()
 }
 
 /**** Linker ****/
-u_int verify_dirty(struct ll_entry * head)
+
+static u_int verify_dirty_cmp(struct ll_entry * head)
 {
   void *source = NULL;
   if((int)head->start>=0xa0000000&&(int)head->start<0xa07fffff) {
@@ -2480,6 +2505,73 @@ u_int verify_dirty(struct ll_entry * head)
     return 0;
 }
 
+// The RDRAM pages (4K units) a block lives in, for blocks reached through kseg0 or the TLB. 0 for the others,
+// which keep the memcmp on every entry. The TLB case needs the mapping to be the one verify_dirty_cmp checked.
+static int block_rdram_pages(const struct ll_entry *head,u_int *first,u_int *last,int *tlb)
+{
+  if(head->length==0) return 0;
+  if(head->start>=0x80000000u&&head->start<0x80800000u) { // kseg0
+    if(head->start+head->length>0x80800000u) return 0;
+    *first=(head->start-0x80000000u)>>12;
+    *last=(head->start+head->length-1-0x80000000u)>>12;
+    *tlb=0;
+    return 1;
+  }
+  if((signed int)head->start>=(signed int)0xC0000000) { // not kseg0/1: mapped through the TLB
+    uintptr_t map_value=g_dev.r4300.new_dynarec_hot_state.memory_map[head->start>>12];
+    if((intptr_t)map_value<(intptr_t)0) return 0;
+    uintptr_t source=(uintptr_t)head->start+(map_value<<2);
+    uintptr_t dram=(uintptr_t)g_dev.rdram.dram;
+    if(source<dram||source-dram+head->length>0x800000) return 0;
+    *first=(source-dram)>>12;
+    *last=(source-dram+head->length-1)>>12;
+    *tlb=1;
+    return 1;
+  }
+  return 0;
+}
+
+// Returns 0 if the block still matches its copy. Called through verify_code on every entry to a dirty block.
+u_int verify_dirty(struct ll_entry * head)
+{
+  u_int p;
+  if(head->verified_gen) {
+    u_int gen=head->verified_gen;
+    if(!(head->verified_tlb&&tlb_inv_gen>gen)) {
+      for(p=head->verified_first;p<=head->verified_last;p++) if(page_inv_gen[p]>gen) break;
+      if(p>head->verified_last) return 0;
+    }
+  }
+  head->verified_gen=0;
+  if(verify_dirty_cmp(head)) return head->vaddr;
+  u_int first,last;
+  int tlb;
+  if(block_rdram_pages(head,&first,&last,&tlb)) {
+    // Trap stores to the block's pages again (invalidate_block stopped doing so), as a compile does.
+    char *invalid_code=g_dev.r4300.cached_interp.invalid_code;
+    uintptr_t *memory_map=g_dev.r4300.new_dynarec_hot_state.memory_map;
+    for(p=first;p<=last;p++) {
+      if(invalid_code[0x80000+p]) {
+        invalid_code[0x80000+p]=0;
+        memory_map[0x80000+p]|=WRITE_PROTECT;
+      }
+    }
+    if(tlb) {
+      for(p=head->start>>12;p<=(head->start+head->length-1)>>12;p++) {
+        if(invalid_code[p]) {
+          invalid_code[p]=0;
+          memory_map[p]|=WRITE_PROTECT;
+        }
+      }
+    }
+    head->verified_first=first;
+    head->verified_last=last;
+    head->verified_tlb=tlb;
+    head->verified_gen=inv_gen;
+  }
+  return 0;
+}
+
 // Add virtual address mapping for 32-bit compiled block
 static struct ll_entry *ll_add_32(struct ll_entry **head,int vaddr,u_int reg32,void *addr,void *clean_addr,u_int start,void *copy,u_int length)
 {
@@ -2493,6 +2585,8 @@ static struct ll_entry *ll_add_32(struct ll_entry **head,int vaddr,u_int reg32,v
   new_entry->start=start;
   new_entry->copy=copy;
   new_entry->length=length;
+  new_entry->verified_gen=0;
+  new_entry->verified_tlb=0;
   new_entry->next=*head;
   *head=new_entry;
   return new_entry;
@@ -2987,6 +3081,9 @@ static void invalidate_block_impl(u_int block)
   invalidate_page(page);
   assert(first+5>page); // NB: this assumes MAXBLOCK<=4096 (4 pages)
   assert(last<page+5);
+  for(u_int q=first;q<=last;q++) stamp_page_invalidated(q);
+  stamp_page_invalidated(page);
+  if(block<0x80000||block>=0xC0000) stamp_tlb_changed();
   // Invalidate the adjacent pages if a block crosses a 4K boundary
   while(first<page) {
     invalidate_page(first);
@@ -3009,6 +3106,7 @@ static void invalidate_block_impl(u_int block)
     g_dev.r4300.new_dynarec_hot_state.memory_map[block]=((uintptr_t)g_dev.rdram.dram+(uintptr_t)((g_dev.r4300.cp0.tlb.LUT_w[block]&0xFFFFF000)-0x80000000)-(block<<12))>>2;
     u_int real_block=g_dev.r4300.cp0.tlb.LUT_w[block]>>12;
     g_dev.r4300.cached_interp.invalid_code[real_block]=1;
+    stamp_page_invalidated(real_block-0x80000);
     if(real_block>=0x80000&&real_block<0x80800) g_dev.r4300.new_dynarec_hot_state.memory_map[real_block]=((uintptr_t)g_dev.rdram.dram-(uintptr_t)0x80000000)>>2;
   }
   else if(block>=0x80000&&block<0x80800) g_dev.r4300.new_dynarec_hot_state.memory_map[block]=((uintptr_t)g_dev.rdram.dram-(uintptr_t)0x80000000)>>2;
@@ -3032,6 +3130,9 @@ static void invalidate_all_pages(void)
   jit_write_begin();
   for(page=0;page<4096;page++)
     invalidate_page(page);
+  stamp_tlb_changed();
+  for(page=0;page<2048;page++)
+    page_inv_gen[page]=inv_gen;
   for(page=0;page<1048576;page++)
   {
     if(!g_dev.r4300.cached_interp.invalid_code[page]) {
@@ -3057,6 +3158,19 @@ static void invalidate_all_pages(void)
     if(page==0x80000) page=0xC0000;
   }
   tlb_speed_hacks();
+}
+
+// RDRAM was written by something other than a CPU store or a cart DMA (SP and SI DMA, the PI DMA of save
+// media), none of which go through invalidate_block: the verified dirty blocks in those pages have to be
+// compared again. Clean blocks are not affected (as before).
+void new_dynarec_rdram_written(uint32_t rdram_offset, size_t size)
+{
+  if(size==0) return;
+  uint64_t end=(uint64_t)rdram_offset+size-1;
+  uint32_t first=rdram_offset>>12, last=(uint32_t)(end>>12), p;
+  for(p=first;p<=last&&p<2048;p++) stamp_page_invalidated(p);
+  if(end>=0x800000) // the DMA address wraps around at the end of RDRAM
+    for(p=0;p<=(uint32_t)((end-0x800000)>>12)&&p<2048;p++) stamp_page_invalidated(p);
 }
 
 void invalidate_cached_code_new_dynarec(struct r4300_core* r4300, uint32_t address, size_t size)
@@ -3095,7 +3209,7 @@ void clean_blocks(u_int page)
     if(!g_dev.r4300.cached_interp.invalid_code[head->vaddr>>12]) {
       // Don't restore blocks which are about to expire from the cache
       if((((uintptr_t)head->addr-(uintptr_t)out)<<(32-TARGET_SIZE_2))>0x60000000+(MAX_OUTPUT_BLOCK_SIZE<<(32-TARGET_SIZE_2))) {
-        if(verify_dirty(head)==0) {
+        if(verify_dirty_cmp(head)==0) {
           //DebugMessage(M64MSG_VERBOSE, "Possibly Restore %x (%x)",head->vaddr, (intptr_t)head->addr);
           u_int i,j;
           u_int inv=0;
@@ -8865,6 +8979,9 @@ void new_dynarec_init(void)
   int n;
   for(n=0x80000;n<0x80800;n++)
     g_dev.r4300.cached_interp.invalid_code[n]=1;
+  stamp_tlb_changed();
+  for(n=0;n<2048;n++)
+    page_inv_gen[n]=inv_gen;
   for(n=0;n<65536;n++)
     hash_table[n][0]=hash_table[n][1]=NULL;
   memset(g_dev.r4300.new_dynarec_hot_state.mini_ht,-1,sizeof(g_dev.r4300.new_dynarec_hot_state.mini_ht));

@@ -93,6 +93,7 @@ extern unsigned int stop_after_jal;
 extern unsigned int using_tlb;
 
 void invalidate_cached_code_new_dynarec(struct r4300_core* r4300, uint32_t address, size_t size);
+void new_dynarec_rdram_written(uint32_t rdram_offset, size_t size);
 void new_dynarec_init(void);
 void new_dyna_start(void);
 void new_dynarec_cleanup(void);

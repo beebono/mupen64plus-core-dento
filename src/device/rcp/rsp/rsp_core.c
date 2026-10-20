@@ -60,6 +60,7 @@ static void do_sp_dma(struct rsp_core* sp, const struct sp_dma* dma)
                 memaddr++;
                 dramaddr++;
             }
+            r4300_note_rdram_write(sp->mi->r4300, (dramaddr - length) & 0x7fffff, length);
             if (dramaddr <= 0x800000)
                 post_framebuffer_write(&sp->dp->fb, dramaddr - length, length);
             dramaddr+=skip;

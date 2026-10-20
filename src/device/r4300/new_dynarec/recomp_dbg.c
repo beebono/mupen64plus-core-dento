@@ -57,6 +57,7 @@
 #define invalidate_all_pages                    recomp_dbg_invalidate_all_pages
 #define invalidate_block                        recomp_dbg_invalidate_block
 #define invalidate_cached_code_new_dynarec      recomp_dbg_invalidate_cached_code_new_dynarec
+#define new_dynarec_rdram_written               recomp_dbg_new_dynarec_rdram_written
 #define new_dynarec_cleanup                     recomp_dbg_new_dynarec_cleanup
 #define new_dynarec_init                        recomp_dbg_new_dynarec_init
 #define new_recompile_block                     recomp_dbg_new_recompile_block
