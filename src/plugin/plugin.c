@@ -93,13 +93,8 @@ void ResizeVideoOutput(int width, int height){
         X##FBGetFrameBufferInfo \
     }
 
-DEFINE_GFX(gln64);
-#if defined(HAVE_THR_AL)
-DEFINE_GFX(angrylion);
-#endif
-#if defined(HAVE_PARALLEL_RDP)
-DEFINE_GFX(parallel);
-#endif
+/* foir and arMLEt are linked in with the foir_ / armlet_ symbol prefixes */
+DEFINE_GFX(foir_);
 
 gfx_plugin_functions gfx;
 GFX_INFO gfx_info;
@@ -182,16 +177,7 @@ static void EmptyFunc(void)
         X##RomClosed \
     }
 
-// Define RSP Interfaces
-DEFINE_RSP(hle);
-
-#ifdef HAVE_PARALLEL_RSP
-DEFINE_RSP(parallelRSP);
-#endif // HAVE_PARALLEL_RSP
-
-#if HAVE_LLE
-DEFINE_RSP(cxd4);
-#endif // HAVE_LLE
+DEFINE_RSP(armlet_);
 
 static void                     (*l_mainRenderCallback)(int) = NULL;
 static ptr_SetRenderingCallback   l_old1SetRenderingCallback = NULL;
@@ -392,116 +378,22 @@ m64p_error plugin_check(void)
     return M64ERR_SUCCESS;
 }
 
-#ifdef __LIBRETRO__
-enum rdp_plugin_type current_rdp_type = RDP_PLUGIN_NONE;
-enum rsp_plugin_type current_rsp_type = RSP_PLUGIN_NONE;
-
-void plugin_connect_rdp_api(enum rdp_plugin_type type)
-{
-   switch (type)
-   {
-      case RDP_PLUGIN_GLIDEN64:
-      case RDP_PLUGIN_ANGRYLION:
-      case RDP_PLUGIN_PARALLEL:
-         current_rdp_type = type;
-         break;
-      case RSP_PLUGIN_NONE:
-      default:
-         break;
-   }
-}
-
-void plugin_connect_rsp_api(enum rsp_plugin_type type)
-{
-   switch (type)
-   {
-      case RSP_PLUGIN_HLE:
-      case RSP_PLUGIN_CXD4:
-      case RSP_PLUGIN_PARALLEL:
-         current_rsp_type = type;
-         break;
-      case RSP_PLUGIN_NONE:
-      default:
-         break;
-   }
-}
-
 /* global functions */
 void plugin_connect_all()
 {
-    switch (current_rdp_type)
-    {
-       case RDP_PLUGIN_ANGRYLION:
-#ifdef HAVE_THR_AL
-          gfx = gfx_angrylion;
-#endif
-          break;
-       case RDP_PLUGIN_PARALLEL:
-#ifdef HAVE_PARALLEL_RDP
-          gfx = gfx_parallel;
-#endif
-          break;
-       case RDP_PLUGIN_GLIDEN64:
-          gfx = gfx_gln64;
-          break;
-      case RDP_PLUGIN_NONE:
-      default:
-         break;
-    }
-
+    gfx = gfx_foir_;
     l_GfxAttached = 1;
     plugin_start_gfx();
 
-    switch (current_rsp_type)
-    {
-      case RSP_PLUGIN_HLE:
-         rsp = rsp_hle;
-         break;
-      case RSP_PLUGIN_CXD4:
-#ifdef HAVE_LLE
-         rsp = rsp_cxd4;
-#endif // HAVE_LLE
-         break;
-      case RSP_PLUGIN_PARALLEL:
-#ifdef HAVE_PARALLEL_RSP
-         rsp = rsp_parallelRSP;
-#endif // HAVE_PARALLEL_RSP
-         break;
-      case RSP_PLUGIN_NONE:
-      default:
-         break;
-    }
-
+    rsp = rsp_armlet_;
     l_RspAttached = 1;
     plugin_start_rsp();
 
     audio = dummy_audio;
     l_AudioAttached = 1;
     //plugin_start_audio();
-    
+
     input = dummy_input;
     l_InputAttached = 1;
     plugin_start_input();
 }
-#else
-/* global functions */
-void plugin_connect_all()
-{
-    gfx = gfx_gln64;
-    l_GfxAttached = 1;
-    plugin_start_gfx();
-
-    rsp = rsp_hle;
-    l_RspAttached = 1;
-    plugin_start_rsp();
-
-    audio = dummy_audio;
-    l_AudioAttached = 1;
-    //plugin_start_audio();
-    
-    input = dummy_input;
-    l_InputAttached = 1;
-    plugin_start_input();
-}
-#endif
-

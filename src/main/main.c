@@ -256,20 +256,14 @@ static void main_check_inputs(void)
 #ifdef WITH_LIRC
     lircCheckInput();
 #endif
-    if(!(current_rdp_type == RDP_PLUGIN_GLIDEN64 && EnableThreadedRenderer))
-    {
-        // Input Polling will be forced to early if Threaded GLideN64
-        poll_cb();
-    }
+    poll_cb();
 }
 
 /*********************************************************************************************************
 * global functions, for adjusting the core emulator behavior
 */
-extern void Config_LoadConfig();
 int main_set_core_defaults(void)
 {
-    Config_LoadConfig();
     return 1;
 }
 
@@ -1355,8 +1349,6 @@ void main_change_gb_cart(int control_id)
 /*********************************************************************************************************
 * emulation thread - runs the core
 */
-extern gfx_plugin_functions gfx_gln64;
-extern rsp_plugin_functions rsp_hle;
 extern input_plugin_functions dummy_input;
 extern audio_plugin_functions dummy_audio;
 
@@ -1768,11 +1760,7 @@ m64p_error main_run(void)
      */
     extern cothread_t retro_thread;
 
-    // For GLN64 Threaded GL we just sanely return, exit sync is handled elsewhere
-    if(!(current_rdp_type == RDP_PLUGIN_GLIDEN64 && EnableThreadedRenderer))
-    {
-        co_switch(retro_thread);
-    }
+    co_switch(retro_thread);
 
     return M64ERR_SUCCESS;
 
