@@ -428,7 +428,7 @@ int main_set_core_defaults(void)
     ConfigSetDefaultBool(g_CoreConfig, "DisableExtraMem", 0, "Disable 4MB expansion RAM pack. May be necessary for some games");
     ConfigSetDefaultInt(g_CoreConfig, "CountPerOp", 0, "Force number of cycles per emulated instruction");
     ConfigSetDefaultInt(g_CoreConfig, "CountPerOpDenomPot", 0, "Reduce number of cycles per update by power of two when set greater than 0 (overclock)");
-    ConfigSetDefaultInt(g_CoreConfig, "RspGfxTaskDelay", 262144, "Cycles between the end of a graphics task and its SP interrupt (0 = 1000, upstream); stands in for the time the RSP would have taken");
+    ConfigSetDefaultInt(g_CoreConfig, "RspGfxTaskDelay", 0, "Cycles between the end of a graphics task and its SP interrupt (0 = 1000, upstream). Experimental: above 32000 the Rare games (Conker, Jet Force Gemini) stop rendering");
     ConfigSetDefaultInt(g_CoreConfig, "RspResumeDelay", 262144, "Cycles before a graphics task the RSP plugin left unfinished (waiting for the CPU) is resumed on the next SP status write; 0 = 1000, the delay of a finished task's interrupt");
     ConfigSetDefaultBool(g_CoreConfig, "AutoStateSlotIncrement", 0, "Increment the save state slot after each save operation");
     ConfigSetDefaultInt(g_CoreConfig, "CurrentStateSlot", 0, "Save state slot (0-9) to use when saving/loading the emulator state");
