@@ -56,6 +56,7 @@
 #include "backends/file_storage.h"
 #include "cheat.h"
 #include "device/device.h"
+#include "device/rcp/rsp/rsp_core.h"
 #include "device/dd/disk.h"
 #include "device/controllers/vru_controller.h"
 #include "device/controllers/paks/biopak.h"
@@ -427,6 +428,8 @@ int main_set_core_defaults(void)
     ConfigSetDefaultBool(g_CoreConfig, "DisableExtraMem", 0, "Disable 4MB expansion RAM pack. May be necessary for some games");
     ConfigSetDefaultInt(g_CoreConfig, "CountPerOp", 0, "Force number of cycles per emulated instruction");
     ConfigSetDefaultInt(g_CoreConfig, "CountPerOpDenomPot", 0, "Reduce number of cycles per update by power of two when set greater than 0 (overclock)");
+    ConfigSetDefaultInt(g_CoreConfig, "RspGfxTaskDelay", 262144, "Cycles between the end of a graphics task and its SP interrupt (0 = 1000, upstream); stands in for the time the RSP would have taken");
+    ConfigSetDefaultInt(g_CoreConfig, "RspResumeDelay", 262144, "Cycles before a graphics task the RSP plugin left unfinished (waiting for the CPU) is resumed on the next SP status write; 0 = 1000, the delay of a finished task's interrupt");
     ConfigSetDefaultBool(g_CoreConfig, "AutoStateSlotIncrement", 0, "Increment the save state slot after each save operation");
     ConfigSetDefaultInt(g_CoreConfig, "CurrentStateSlot", 0, "Save state slot (0-9) to use when saving/loading the emulator state");
     ConfigSetDefaultBool(g_CoreConfig, "EnableDebugger", 0, "Activate the R4300 debugger when ROM execution begins, if core was built with Debugger support");
@@ -1582,6 +1585,8 @@ m64p_error main_run(void)
     size_t rdram_size;
     uint32_t count_per_op;
     uint32_t count_per_op_denom_pot;
+    uint32_t rsp_resume_delay;
+    uint32_t rsp_gfx_task_delay;
     uint32_t emumode;
     uint32_t disable_extra_mem;
     int32_t si_dma_duration;
@@ -1631,6 +1636,8 @@ m64p_error main_run(void)
     randomize_interrupt = !netplay_is_init() ? ConfigGetParamBool(g_CoreConfig, "RandomizeInterrupt") : 0;
     count_per_op = ConfigGetParamInt(g_CoreConfig, "CountPerOp");
     count_per_op_denom_pot = ConfigGetParamInt(g_CoreConfig, "CountPerOpDenomPot");
+    rsp_resume_delay = ConfigGetParamInt(g_CoreConfig, "RspResumeDelay");
+    rsp_gfx_task_delay = ConfigGetParamInt(g_CoreConfig, "RspGfxTaskDelay");
 
     if (ROM_SETTINGS.disableextramem)
         disable_extra_mem = ROM_SETTINGS.disableextramem;
@@ -1920,6 +1927,8 @@ m64p_error main_run(void)
                 NULL, dd_rtc_iclock,
                 dd_rom_size,
                 &dd_disk, dd_idisk);
+    set_rsp_resume_delay(&g_dev.sp, rsp_resume_delay);
+    set_rsp_gfx_task_delay(&g_dev.sp, rsp_gfx_task_delay);
 
     // Attach rom to plugins
     failure_rval = M64ERR_PLUGIN_FAIL;

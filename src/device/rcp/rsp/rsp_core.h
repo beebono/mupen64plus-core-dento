@@ -97,6 +97,8 @@ struct rsp_core
     uint32_t regs[SP_REGS_COUNT];
     uint32_t regs2[SP_REGS2_COUNT];
     uint32_t rsp_task_locked;
+    uint32_t resume_delay;
+    uint32_t gfx_task_delay;
 
     struct mi_controller* mi;
     struct rdp_core* dp;
@@ -124,6 +126,12 @@ void init_rsp(struct rsp_core* sp,
               struct mi_controller* mi,
               struct rdp_core* dp,
               struct ri_controller* ri);
+
+/* the delay (CPU cycles) before a graphics task the RSP plugin left unfinished (a task that waits for the CPU, cut by the plugin) is run again on the next SP_STATUS write;
+ * 0 = the 1000 of a finished task's interrupt. Gauntlet Legends resumed its task ~800 times per frame at 1000 (Core[RspResumeDelay]) */
+void set_rsp_resume_delay(struct rsp_core* sp, uint32_t cycles);
+/* the delay (CPU cycles) between the end of a graphics task and its SP interrupt; 1000 (upstream) if 0. Stands in for the time the RSP would have taken (Core[RspGfxTaskDelay]) */
+void set_rsp_gfx_task_delay(struct rsp_core* sp, uint32_t cycles);
 
 void poweron_rsp(struct rsp_core* sp);
 
