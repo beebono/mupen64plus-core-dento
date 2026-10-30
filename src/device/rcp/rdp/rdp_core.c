@@ -41,8 +41,10 @@ static void update_dpc_status(struct rdp_core* dp, uint32_t w)
     {
         dp->dpc_regs[DPC_STATUS_REG] &= ~DPC_STATUS_FREEZE;
 
-        if (dp->do_on_unfreeze & DELAY_DP_INT)
+        if (dp->do_on_unfreeze & DELAY_DP_INT) {
+            if (gfx.fullSyncDelivered) gfx.fullSyncDelivered();
             signal_rcp_interrupt(dp->mi, MI_INTR_DP);
+        }
         if (dp->do_on_unfreeze & DELAY_UPDATESCREEN)
             gfx.updateScreen();
         dp->do_on_unfreeze = 0;
@@ -152,6 +154,7 @@ void rdp_interrupt_event(void* opaque)
 {
     struct rdp_core* dp = (struct rdp_core*)opaque;
 
+    if (gfx.fullSyncDelivered) gfx.fullSyncDelivered();     /* the frame must be drawn when the game learns it is */
     raise_rcp_interrupt(dp->mi, MI_INTR_DP);
     if (dp->full_syncs_pending != 0) {
         --dp->full_syncs_pending;

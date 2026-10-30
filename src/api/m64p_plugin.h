@@ -199,6 +199,9 @@ typedef void (*ptr_ViWidthChanged)(void);
 typedef void (*ptr_ReadScreen2)(void *dest, int *width, int *height, int front);
 typedef void (*ptr_SetRenderingCallback)(void (*callback)(int));
 typedef void (*ptr_ResizeVideoOutput)(int width, int height);
+/* optional (core-dento): called on the emulation thread just before a DP (full sync) interrupt is delivered, so a plugin that renders
+ * behind SYNC_FULL can finish the frame the game is about to look at */
+typedef void (*ptr_FullSyncDelivered)(void);
 #if defined(M64P_PLUGIN_PROTOTYPES)
 EXPORT void CALL ChangeWindow(void);
 EXPORT int  CALL InitiateGFX(GFX_INFO Gfx_Info);
@@ -212,6 +215,7 @@ EXPORT void CALL ViWidthChanged(void);
 EXPORT void CALL ReadScreen2(void *dest, int *width, int *height, int front);
 EXPORT void CALL SetRenderingCallback(void (*callback)(int));
 EXPORT void CALL ResizeVideoOutput(int width, int height);
+EXPORT void CALL FullSyncDelivered(void);
 #endif
 
 /* frame buffer plugin spec extension */

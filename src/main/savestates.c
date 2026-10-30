@@ -2169,6 +2169,7 @@ static int savestates_save_pj64_unc(const struct device* dev, char *filepath)
 
 int savestates_save(void)
 {
+    if (gfx.fullSyncDelivered) gfx.fullSyncDelivered();      /* RDRAM must hold the finished frame */
     char *filepath;
     int ret = 0;
     const struct device* dev = &g_dev;

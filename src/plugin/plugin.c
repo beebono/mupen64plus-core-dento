@@ -157,7 +157,7 @@ static void EmptyFunc(void)
 #define SP_GFX(P, X) SP_COMMON(P, X) \
     X(P, ChangeWindow) X(P, InitiateGFX) X(P, MoveScreen) X(P, ProcessDList) X(P, ProcessRDPList) \
     X(P, ShowCFB) X(P, UpdateScreen) X(P, ViStatusChanged) X(P, ViWidthChanged) X(P, ReadScreen2) \
-    X(P, SetRenderingCallback) X(P, ResizeVideoOutput) X(P, FBRead) X(P, FBWrite) \
+    X(P, SetRenderingCallback) X(P, ResizeVideoOutput) X(P, FullSyncDelivered) X(P, FBRead) X(P, FBWrite) \
     X(P, FBGetFrameBufferInfo)
 #define SP_AUDIO(P, X) SP_COMMON(P, X) \
     X(P, AiDacrateChanged) X(P, AiLenChanged) X(P, InitiateAudio) X(P, ProcessAList) \
@@ -286,6 +286,7 @@ static m64p_error plugin_connect_gfx(m64p_dynlib_handle plugin_handle)
 
         /* set function pointers for optional functions */
         gfx.resizeVideoOutput = (ptr_ResizeVideoOutput)PLUGIN_GETPROC(plugin_handle, "ResizeVideoOutput");
+        gfx.fullSyncDelivered = (ptr_FullSyncDelivered)PLUGIN_GETPROC(plugin_handle, "FullSyncDelivered");
 
         /* check the version info */
         (*gfx.getVersion)(&PluginType, &PluginVersion, &APIVersion, NULL, NULL);
