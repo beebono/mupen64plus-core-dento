@@ -364,8 +364,7 @@ void do_SP_Task(struct rsp_core* sp)
             if (sp->dp->dpc_regs[DPC_STATUS_REG] & DPC_STATUS_FREEZE) {
                 sp->dp->do_on_unfreeze |= DELAY_DP_INT;
             } else {
-                cp0_update_count(sp->mi->r4300);
-                add_interrupt_event(&sp->mi->r4300->cp0, DP_INT, 4000);
+                rdp_full_sync_done(sp->dp);
             }
         }
         sp_delay_time = sp->gfx_task_delay ? sp->gfx_task_delay : 1000;

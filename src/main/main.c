@@ -429,6 +429,7 @@ int main_set_core_defaults(void)
     ConfigSetDefaultInt(g_CoreConfig, "CountPerOp", 0, "Force number of cycles per emulated instruction");
     ConfigSetDefaultInt(g_CoreConfig, "CountPerOpDenomPot", 0, "Reduce number of cycles per update by power of two when set greater than 0 (overclock)");
     ConfigSetDefaultInt(g_CoreConfig, "RspGfxTaskDelay", 0, "Cycles between the end of a graphics task and its SP interrupt (0 = 1000, upstream). Experimental: above 32000 the Rare games (Conker, Jet Force Gemini) stop rendering");
+    ConfigSetDefaultInt(g_CoreConfig, "RdpFullSyncDelay", 600000, "Cycles between the end of a graphics task and its DP (full sync) interrupt; 0 = 4000, upstream. Stands in for the RDP's drawing time, which a game that starts a frame when the last one is drawn paces itself by (Gauntlet Legends)");
     ConfigSetDefaultInt(g_CoreConfig, "RspResumeDelay", 262144, "Cycles before a graphics task the RSP plugin left unfinished (waiting for the CPU) is resumed on the next SP status write; 0 = 1000, the delay of a finished task's interrupt");
     ConfigSetDefaultBool(g_CoreConfig, "AutoStateSlotIncrement", 0, "Increment the save state slot after each save operation");
     ConfigSetDefaultInt(g_CoreConfig, "CurrentStateSlot", 0, "Save state slot (0-9) to use when saving/loading the emulator state");
@@ -1587,6 +1588,7 @@ m64p_error main_run(void)
     uint32_t count_per_op_denom_pot;
     uint32_t rsp_resume_delay;
     uint32_t rsp_gfx_task_delay;
+    uint32_t rdp_full_sync_delay;
     uint32_t emumode;
     uint32_t disable_extra_mem;
     int32_t si_dma_duration;
@@ -1638,6 +1640,7 @@ m64p_error main_run(void)
     count_per_op_denom_pot = ConfigGetParamInt(g_CoreConfig, "CountPerOpDenomPot");
     rsp_resume_delay = ConfigGetParamInt(g_CoreConfig, "RspResumeDelay");
     rsp_gfx_task_delay = ConfigGetParamInt(g_CoreConfig, "RspGfxTaskDelay");
+    rdp_full_sync_delay = ConfigGetParamInt(g_CoreConfig, "RdpFullSyncDelay");
 
     if (ROM_SETTINGS.disableextramem)
         disable_extra_mem = ROM_SETTINGS.disableextramem;
@@ -1929,6 +1932,7 @@ m64p_error main_run(void)
                 &dd_disk, dd_idisk);
     set_rsp_resume_delay(&g_dev.sp, rsp_resume_delay);
     set_rsp_gfx_task_delay(&g_dev.sp, rsp_gfx_task_delay);
+    set_rdp_full_sync_delay(&g_dev.dp, rdp_full_sync_delay);
 
     // Attach rom to plugins
     failure_rval = M64ERR_PLUGIN_FAIL;
