@@ -124,6 +124,8 @@ static int   l_TakeScreenshot = 0;       // Tell OSD Rendering callback to take 
 static int   l_SpeedFactor = 100;        // percentage of nominal game speed at which emulator is running
 static int   l_FrameAdvance = 0;         // variable to check if we pause on next frame
 static int   l_MainSpeedLimit = 1;       // insert delay during vi_interrupt to keep speed at real-time
+static uint32_t l_FullSyncDelayMin = 0;  // Core[RdpFullSyncDelay] / Core[RdpFullSyncDelayMax]: the range adapt_full_sync_delay moves in
+static uint32_t l_FullSyncDelayMax = 0;
 
 static osd_message_t *l_msgVol = NULL;
 static osd_message_t *l_msgFF = NULL;
@@ -430,6 +432,7 @@ int main_set_core_defaults(void)
     ConfigSetDefaultInt(g_CoreConfig, "CountPerOpDenomPot", 0, "Reduce number of cycles per update by power of two when set greater than 0 (overclock)");
     ConfigSetDefaultInt(g_CoreConfig, "RspGfxTaskDelay", 0, "Cycles between the end of a graphics task and its SP interrupt (0 = 1000, upstream). Experimental: above 32000 the Rare games (Conker, Jet Force Gemini) stop rendering");
     ConfigSetDefaultInt(g_CoreConfig, "RdpFullSyncDelay", 600000, "Cycles between the end of a graphics task and its DP (full sync) interrupt; 0 = 4000, upstream. Stands in for the RDP's drawing time, which a game that starts a frame when the last one is drawn paces itself by (Gauntlet Legends)");
+    ConfigSetDefaultInt(g_CoreConfig, "RdpFullSyncDelayMax", 900000, "The delay rises towards this while the emulator is behind real time (the game then draws fewer frames instead of slowing down) and falls back when it has slack; <= RdpFullSyncDelay = fixed. A 60 fps game loses frames above one VI (811000 NTSC), but only while it is behind anyway");
     ConfigSetDefaultInt(g_CoreConfig, "RspResumeDelay", 262144, "Cycles before a graphics task the RSP plugin left unfinished (waiting for the CPU) is resumed on the next SP status write; 0 = 1000, the delay of a finished task's interrupt");
     ConfigSetDefaultBool(g_CoreConfig, "AutoStateSlotIncrement", 0, "Increment the save state slot after each save operation");
     ConfigSetDefaultInt(g_CoreConfig, "CurrentStateSlot", 0, "Save state slot (0-9) to use when saving/loading the emulator state");
@@ -965,6 +968,32 @@ void new_frame(void)
     }
 }
 
+/* The RDP's stand-in drawing time (Core[RdpFullSyncDelay], rdp_core.h) follows the load: while the emulator is behind real time it rises
+ * 4000 a VI towards the maximum (a game that paces itself by the full sync then draws fewer frames, as it did on a console that was
+ * too slow for it, instead of running in slow motion); it falls back by 20000 a second of VIs that all had slack. A game that keeps up
+ * never sees more than the minimum. Off while fast-forwarding, and when Max <= Min (the equivalence runs: the delay would depend on
+ * the wall clock). */
+static void adapt_full_sync_delay(double sleepTime)
+{
+    static unsigned int n = 0, slack = 0, behind = 0;
+    uint32_t d = g_dev.dp.full_sync_delay;
+    if (!l_MainSpeedLimit || l_SpeedFactor != 100 || l_FullSyncDelayMax <= l_FullSyncDelayMin)
+        return;
+    if (sleepTime < -2.0) {
+        ++behind;
+        d = (d + 4000 < l_FullSyncDelayMax) ? d + 4000 : l_FullSyncDelayMax;
+    } else if (sleepTime > 0.0) {
+        ++slack;
+    }
+    if (++n >= 60) {
+        if (behind == 0 && slack >= 54)
+            d = (d > l_FullSyncDelayMin + 20000) ? d - 20000 : l_FullSyncDelayMin;
+        n = slack = behind = 0;
+    }
+    if (d != g_dev.dp.full_sync_delay)
+        set_rdp_full_sync_delay(&g_dev.dp, d);
+}
+
 static void apply_speed_limiter(void)
 {
     static unsigned long totalVIs = 0;
@@ -1016,6 +1045,8 @@ static void apply_speed_limiter(void)
     if (sleepTime < minSleepNeeded) {
         totalVIs += (unsigned long)(minSleepNeeded/AdjustedLimit);
     }
+
+    adapt_full_sync_delay(sleepTime);
 
     if(l_MainSpeedLimit && sleepTime > 0 && sleepTime < maxSleepNeeded*SpeedFactorMultiple)
     {
@@ -1641,6 +1672,8 @@ m64p_error main_run(void)
     rsp_resume_delay = ConfigGetParamInt(g_CoreConfig, "RspResumeDelay");
     rsp_gfx_task_delay = ConfigGetParamInt(g_CoreConfig, "RspGfxTaskDelay");
     rdp_full_sync_delay = ConfigGetParamInt(g_CoreConfig, "RdpFullSyncDelay");
+    l_FullSyncDelayMin = rdp_full_sync_delay ? rdp_full_sync_delay : 4000;
+    l_FullSyncDelayMax = ConfigGetParamInt(g_CoreConfig, "RdpFullSyncDelayMax");
 
     if (ROM_SETTINGS.disableextramem)
         disable_extra_mem = ROM_SETTINGS.disableextramem;
