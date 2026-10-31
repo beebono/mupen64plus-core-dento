@@ -831,7 +831,7 @@ void recomp_dbg_init(void)
   recomp_dbg_out=(u_char *)recomp_dbg_base_addr;
 
   for(int n=0;n<65536;n++)
-    hash_table[n][0]=hash_table[n][1]=NULL;
+    {hash_table[n][0]=hash_table[n][1]=NULL; ht_fast[n].vaddr[0]=ht_fast[n].vaddr[1]=~0u;}
 
   copy_size=0;
   expirep=16384; // Expiry pointer, +2 blocks

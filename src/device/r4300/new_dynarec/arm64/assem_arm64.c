@@ -82,6 +82,7 @@ static void invalidate_addr(u_int addr);
 
 static uintptr_t literals[1024][2];
 static unsigned int needs_clear_cache[1<<(TARGET_SIZE_2-17)];
+static int clear_cache_pending; /* a bit is set in needs_clear_cache (do_clear_cache is called per TLB write) */
 
 static const uintptr_t jump_vaddr_reg[32] = {
   (intptr_t)jump_vaddr_x0,
@@ -342,43 +343,81 @@ static void add_literal(uintptr_t addr,uintptr_t val)
   literalcount++;
 }
 
+/* Block exits: the site is `b stub` or `b.cond stub`; the stub (emit_extjump2) is
+ *   [0] nop   [1] movz w1  [2] movk w1  [3] adr x0, site  [4] b linker
+ * Linking a `b` site repoints the site at the target. A `b.cond` site reaches only +-1 MB, so it stays
+ * pointed at the stub and the stub's nop becomes `b target`: site -> stub -> target, no linker call
+ * (upstream leaves these unlinked, and every taken one ran the C linker). Unlinking restores the nop. */
+#define STUB_LINK 0
+#define STUB_ADR 3
+#define ARM64_NOP 0xd503201f
+
+static int *stub_site(int *stub)
+{
+  int *ptr=stub+STUB_ADR;
+  assert((*ptr&0x9f000000)==0x10000000); //adr
+  int offset=(((signed int)(*ptr<<8)>>13)<<2)|((*ptr>>29)&0x3);
+  return (int*)((intptr_t)ptr+offset);
+}
+
 static void *add_pointer(void *src, void* addr)
 {
   int *ptr=(int*)src;
-  assert((*ptr&0xFC000000)==0x14000000); //b
-  int offset=((signed int)(*ptr<<6)>>6)<<2;
-  int *ptr2=(int*)((intptr_t)ptr+offset);
-  assert((ptr2[0]&0xFFE00000)==0x52A00000); //movz
-  assert((ptr2[1]&0xFFE00000)==0x72800000); //movk
-  assert((ptr2[2]&0x9f000000)==0x10000000); //adr
-  set_jump_target((intptr_t)src,(intptr_t)addr);
-  intptr_t ptr_rx=((intptr_t)ptr-(intptr_t)base_addr)+(intptr_t)base_addr_rx;
-  cache_flush((void*)ptr_rx, (void*)(ptr_rx+4));
-  return ptr2;
+  int *stub;
+  if((*ptr&0xFC000000)==0x14000000) { //b
+    stub=(int*)((intptr_t)ptr+(((signed int)(*ptr<<6)>>6)<<2));
+  } else {
+    assert((*ptr&0xFF000000)==0x54000000); //b.cond
+    stub=(int*)((intptr_t)ptr+(((signed int)(*ptr<<8)>>13)<<2));
+  }
+  assert(stub[STUB_LINK]==(int)ARM64_NOP);
+  assert((stub[1]&0xFFE00000)==0x52A00000); //movz
+  assert((stub[2]&0xFFE00000)==0x72800000); //movk
+  assert((stub[3]&0x9f000000)==0x10000000); //adr
+  int *mod;
+  if((*ptr&0xFC000000)==0x14000000) {
+    set_jump_target((intptr_t)src,(intptr_t)addr);
+    mod=ptr;
+  } else {
+    intptr_t offset=(intptr_t)addr-(intptr_t)&stub[STUB_LINK];
+    assert(offset>=-134217728LL&&offset<134217728LL);
+    stub[STUB_LINK]=0x14000000|((offset>>2)&0x3ffffff);
+    mod=&stub[STUB_LINK];
+  }
+  intptr_t mod_rx=((intptr_t)mod-(intptr_t)base_addr)+(intptr_t)base_addr_rx;
+  cache_flush((void*)mod_rx, (void*)(mod_rx+4));
+  return stub;
 }
 
-static void *kill_pointer(void *stub)
+static void *kill_pointer(void *stub_)
 {
-  int *ptr=(int *)((intptr_t)stub+8);
-  assert((*ptr&0x9f000000)==0x10000000); //adr
-  int offset=(((signed int)(*ptr<<8)>>13)<<2)|((*ptr>>29)&0x3);
-  int *i_ptr=(int*)((intptr_t)ptr+offset);
-  assert((*i_ptr&0xfc000000)==0x14000000); //b
-  set_jump_target((intptr_t)i_ptr,(intptr_t)stub);
-  
-  intptr_t ptr_rx=((intptr_t)i_ptr-(intptr_t)base_addr)+(intptr_t)base_addr_rx;
-  cache_flush((void*)ptr_rx, (void*)(ptr_rx+4));
-  return i_ptr;
+  int *stub=(int*)stub_;
+  int *i_ptr=stub_site(stub);
+  int *mod;
+  if((*i_ptr&0xfc000000)==0x14000000) { //b site
+    set_jump_target((intptr_t)i_ptr,(intptr_t)stub);
+    mod=i_ptr;
+  } else {
+    assert((*i_ptr&0xff000000)==0x54000000); //b.cond site: unlink the stub
+    stub[STUB_LINK]=(int)ARM64_NOP;
+    mod=&stub[STUB_LINK];
+  }
+  /* flushed here as well (this branch), not only by do_clear_cache */
+  intptr_t mod_rx=((intptr_t)mod-(intptr_t)base_addr)+(intptr_t)base_addr_rx;
+  cache_flush((void*)mod_rx, (void*)(mod_rx+4));
+  return mod;
 }
 
-static intptr_t get_pointer(void *stub)
+static intptr_t get_pointer(void *stub_)
 {
-  int *ptr=(int *)((intptr_t)stub+8);
-  assert((*ptr&0x9f000000)==0x10000000); //adr
-  int offset=(((signed int)(*ptr<<8)>>13)<<2)|((*ptr>>29)&0x3);
-  int *i_ptr=(int*)((intptr_t)ptr+offset);
-  assert((*i_ptr&0xfc000000)==0x14000000); //b
-  return (intptr_t)i_ptr+(((signed int)(*i_ptr<<6)>>6)<<2);
+  int *stub=(int*)stub_;
+  if((stub[STUB_LINK]&0xfc000000)==0x14000000) //linked b.cond site
+    return (intptr_t)&stub[STUB_LINK]+(((signed int)(stub[STUB_LINK]<<6)>>6)<<2);
+  int *i_ptr=stub_site(stub);
+  if((*i_ptr&0xfc000000)==0x14000000)
+    return (intptr_t)i_ptr+(((signed int)(*i_ptr<<6)>>6)<<2);
+  assert((*i_ptr&0xff000000)==0x54000000);
+  return (intptr_t)stub; //unlinked b.cond site points at its stub
 }
 
 /* Register allocation */
@@ -3142,6 +3181,7 @@ static void emit_extjump2(intptr_t addr, int target, intptr_t linker)
 #endif
   assert(((ptr[3]&0xfc)==0x14)||((ptr[3]&0xff)==0x54)); //b or b.cond
 
+  output_w32(ARM64_NOP); //STUB_LINK: `b target` once a b.cond site is linked (add_pointer)
   emit_movz_lsl16(((u_int)target>>16)&0xffff,1);
   emit_movk((u_int)target&0xffff,1);
 
@@ -4604,6 +4644,8 @@ static void do_miniht_insert(u_int return_address,int rt,int temp) {
 static void do_clear_cache(void)
 {
   int i,j;
+  if(!clear_cache_pending) return;
+  clear_cache_pending=0;
   for (i=0;i<(1<<(TARGET_SIZE_2-17));i++)
   {
     u_int bitmap=needs_clear_cache[i];
