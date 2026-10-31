@@ -26,6 +26,8 @@
 #include "device/memory/memory.h"
 #include "device/rcp/mi/mi_controller.h"
 #include "device/rcp/rsp/rsp_core.h"
+#include "device/r4300/r4300_core.h"
+#include "device/r4300/interrupt.h"
 #include "plugin/plugin.h"
 
 static void update_dpc_status(struct rdp_core* dp, uint32_t w)
@@ -39,8 +41,10 @@ static void update_dpc_status(struct rdp_core* dp, uint32_t w)
     {
         dp->dpc_regs[DPC_STATUS_REG] &= ~DPC_STATUS_FREEZE;
 
-        if (dp->do_on_unfreeze & DELAY_DP_INT)
+        if (dp->do_on_unfreeze & DELAY_DP_INT) {
+            if (gfx.fullSyncDelivered) gfx.fullSyncDelivered();
             signal_rcp_interrupt(dp->mi, MI_INTR_DP);
+        }
         if (dp->do_on_unfreeze & DELAY_UPDATESCREEN)
             gfx.updateScreen();
         dp->do_on_unfreeze = 0;
@@ -76,6 +80,7 @@ void poweron_rdp(struct rdp_core* dp)
     dp->dpc_regs[DPC_STATUS_REG] |= DPC_STATUS_START_GCLK;
 
     dp->do_on_unfreeze = 0;
+    dp->full_syncs_pending = 0;
 
     poweron_fb(&dp->fb);
 }
@@ -149,6 +154,28 @@ void rdp_interrupt_event(void* opaque)
 {
     struct rdp_core* dp = (struct rdp_core*)opaque;
 
+    if (gfx.fullSyncDelivered) gfx.fullSyncDelivered();     /* the frame must be drawn when the game learns it is */
     raise_rcp_interrupt(dp->mi, MI_INTR_DP);
+    if (dp->full_syncs_pending != 0) {
+        --dp->full_syncs_pending;
+        cp0_update_count(dp->mi->r4300);
+        add_interrupt_event(&dp->mi->r4300->cp0, DP_INT, dp->full_sync_delay ? dp->full_sync_delay : 4000);
+    }
+}
+
+void set_rdp_full_sync_delay(struct rdp_core* dp, uint32_t cycles)
+{
+    dp->full_sync_delay = cycles;
+}
+
+void rdp_full_sync_done(struct rdp_core* dp)
+{
+    struct cp0* cp0 = &dp->mi->r4300->cp0;
+    if (get_event(&cp0->q, DP_INT)) {
+        ++dp->full_syncs_pending;
+        return;
+    }
+    cp0_update_count(dp->mi->r4300);
+    add_interrupt_event(cp0, DP_INT, dp->full_sync_delay ? dp->full_sync_delay : 4000);
 }
 

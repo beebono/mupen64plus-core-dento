@@ -86,6 +86,8 @@ struct rdp_core
     uint32_t dpc_regs[DPC_REGS_COUNT];
     uint32_t dps_regs[DPS_REGS_COUNT];
     unsigned char do_on_unfreeze;
+    uint32_t full_sync_delay;      /* cycles from the end of a graphics task to its DP interrupt (set_rdp_full_sync_delay) */
+    uint32_t full_syncs_pending;   /* full syncs that completed while a DP interrupt was already queued: each gets its own interrupt, full_sync_delay after the previous */
 
     struct fb fb;
 
@@ -119,5 +121,11 @@ void read_dps_regs(void* opaque, uint32_t address, uint32_t* value);
 void write_dps_regs(void* opaque, uint32_t address, uint32_t value, uint32_t mask);
 
 void rdp_interrupt_event(void* opaque);
+
+/* the delay (CPU cycles) between the end of a graphics task that ends in a full sync and its DP interrupt; 0 = upstream's 4000. Stands in for the RDP's
+ * drawing time, which a game that starts its next frame when the last one is drawn paces itself by (Core[RdpFullSyncDelay]) */
+void set_rdp_full_sync_delay(struct rdp_core* dp, uint32_t cycles);
+/* a graphics task ended in a full sync: queue its DP interrupt (one per full sync, serialised like the RDP) */
+void rdp_full_sync_done(struct rdp_core* dp);
 
 #endif

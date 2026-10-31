@@ -55,6 +55,7 @@
 #include "backends/file_storage.h"
 #include "cheat.h"
 #include "device/device.h"
+#include "device/rcp/rsp/rsp_core.h"
 #include "device/dd/disk.h"
 #include "device/controllers/vru_controller.h"
 #include "device/controllers/paks/biopak.h"
@@ -1360,6 +1361,9 @@ m64p_error main_run(void)
     size_t i, k;
     uint32_t count_per_op;
     uint32_t count_per_op_denom_pot;
+    uint32_t rsp_resume_delay;
+    uint32_t rsp_gfx_task_delay;
+    uint32_t rdp_full_sync_delay;
     uint32_t emumode;
     uint32_t disable_extra_mem;
     int32_t si_dma_duration;
@@ -1409,6 +1413,11 @@ m64p_error main_run(void)
     no_compiled_jump = 0; //ConfigGetParamBool(g_CoreConfig, "NoCompiledJump");
     //We disable any randomness for netplay
     //randomize_interrupt = !netplay_is_init() ? ConfigGetParamBool(g_CoreConfig, "RandomizeInterrupt") : 0;
+    /* the RSP / RDP delays of Core[RspResumeDelay], Core[RspGfxTaskDelay], Core[RdpFullSyncDelay] at their defaults;
+       Core[RdpFullSyncDelayMax] does not apply: the delay only adapts under the core's own speed limiter */
+    rsp_resume_delay = 262144;
+    rsp_gfx_task_delay = 0;
+    rdp_full_sync_delay = 600000;
 
     if (ROM_SETTINGS.disableextramem)
         disable_extra_mem = ROM_SETTINGS.disableextramem;
@@ -1695,6 +1704,9 @@ m64p_error main_run(void)
                 NULL, dd_rtc_iclock,
                 dd_rom_size,
                 &dd_disk, dd_idisk);
+    set_rsp_resume_delay(&g_dev.sp, rsp_resume_delay);
+    set_rsp_gfx_task_delay(&g_dev.sp, rsp_gfx_task_delay);
+    set_rdp_full_sync_delay(&g_dev.dp, rdp_full_sync_delay);
 
     // Attach rom to plugins
     failure_rval = M64ERR_PLUGIN_FAIL;

@@ -5692,7 +5692,8 @@ static void cop1_assemble(int i,struct regstat *i_regs)
     if(copr==31)
     {
       if(fs>=0) emit_mov(sl,fs);
-      else emit_storereg(FSREG,sl);
+      emit_storereg(FSREG,sl);  // always: the C helpers (cvt.w.s and the rest of fpu.h) read the rounding mode from the memory copy, which was stale
+                                // while fcr31 lived in a host register (a compare earlier in the block); a ctc1/cvt.w.s/ctc1 truncating cast then rounded
       set_rounding_mode(sl,temp);
     }
   }

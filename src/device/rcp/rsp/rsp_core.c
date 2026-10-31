@@ -222,6 +222,18 @@ void init_rsp(struct rsp_core* sp,
     sp->mi = mi;
     sp->dp = dp;
     sp->ri = ri;
+    sp->resume_delay = 0;
+    sp->gfx_task_delay = 0;
+}
+
+void set_rsp_gfx_task_delay(struct rsp_core* sp, uint32_t cycles)
+{
+    sp->gfx_task_delay = cycles;
+}
+
+void set_rsp_resume_delay(struct rsp_core* sp, uint32_t cycles)
+{
+    sp->resume_delay = cycles;
 }
 
 void poweron_rsp(struct rsp_core* sp)
@@ -352,11 +364,10 @@ void do_SP_Task(struct rsp_core* sp)
             if (sp->dp->dpc_regs[DPC_STATUS_REG] & DPC_STATUS_FREEZE) {
                 sp->dp->do_on_unfreeze |= DELAY_DP_INT;
             } else {
-                cp0_update_count(sp->mi->r4300);
-                add_interrupt_event(&sp->mi->r4300->cp0, DP_INT, 4000);
+                rdp_full_sync_done(sp->dp);
             }
         }
-        sp_delay_time = 1000;
+        sp_delay_time = sp->gfx_task_delay ? sp->gfx_task_delay : 1000;
 
         protect_framebuffers(&sp->dp->fb);
     }
@@ -391,6 +402,8 @@ void do_SP_Task(struct rsp_core* sp)
         sp->rsp_task_locked = 1;
         sp->mi->r4300->cp0.interrupt_unsafe_state |= INTR_UNSAFE_RSP;
         sp->mi->regs[MI_INTR_REG] |= MI_INTR_SP;
+        if (sp->resume_delay != 0)
+            sp_delay_time = sp->resume_delay;   /* the task waits for the CPU: the next SP_STATUS write runs it again, no sooner than this (set_rsp_resume_delay) */
     }
     if (sp->mi->regs[MI_INTR_REG] & MI_INTR_SP)
     {

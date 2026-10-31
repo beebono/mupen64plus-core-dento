@@ -68,6 +68,7 @@ void ResizeVideoOutput(int width, int height){
     EXPORT void CALL X##ReadScreen2(void *dest, int *width, int *height, int front); \
     EXPORT void CALL X##SetRenderingCallback(void (*callback)(int)); \
     EXPORT void CALL X##ResizeVideoOutput(int width, int height); \
+    EXPORT void CALL X##FullSyncDelivered(void); \
     EXPORT void CALL X##FBRead(unsigned int addr); \
     EXPORT void CALL X##FBWrite(unsigned int addr, unsigned int size); \
     EXPORT void CALL X##FBGetFrameBufferInfo(void *p); \
@@ -88,6 +89,7 @@ void ResizeVideoOutput(int width, int height){
         X##ReadScreen2, \
         X##SetRenderingCallback, \
         ResizeVideoOutput, \
+        X##FullSyncDelivered, \
         X##FBRead, \
         X##FBWrite, \
         X##FBGetFrameBufferInfo \

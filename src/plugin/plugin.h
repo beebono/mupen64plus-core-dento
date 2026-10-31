@@ -63,6 +63,7 @@ typedef struct _gfx_plugin_functions
 	ptr_ReadScreen2      readScreen;
 	ptr_SetRenderingCallback setRenderingCallback;
     ptr_ResizeVideoOutput    resizeVideoOutput;
+    ptr_FullSyncDelivered    fullSyncDelivered;      /* optional, NULL if the plugin has none */
 
 	/* frame buffer plugin spec extension */
 	ptr_FBRead          fBRead;

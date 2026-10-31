@@ -19,6 +19,7 @@
  *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.          *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#include <fenv.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -142,6 +143,18 @@ void update_x86_rounding_mode(struct cp1* cp1)
     {
         _MM_SET_FLUSH_ZERO_MODE(flush_mode);
         cp1->flush_mode = flush_mode;
+    }
+#endif
+
+#if defined(__aarch64__) || defined(__arm__)
+    /* The new dynarec's inline FPU ops run with the host rounding mode, which only its CTC1 sets: load it from fcr31 here too
+     * (power-on, savestate load), as the x87 control word is below. The interpreter sets it per op. */
+    switch (fcr31 & 3)
+    {
+    case 0: fesetround(FE_TONEAREST); break;
+    case 1: fesetround(FE_TOWARDZERO); break;
+    case 2: fesetround(FE_UPWARD); break;
+    case 3: fesetround(FE_DOWNWARD); break;
     }
 #endif
 
