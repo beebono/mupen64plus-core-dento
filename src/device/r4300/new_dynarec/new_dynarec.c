@@ -385,6 +385,18 @@ static int expirep;
 static u_int dirty_entry_count;
 static u_int copy_size;
 static struct ll_entry* hash_table[65536][2];
+/* Compact shadow of hash_table for the indirect-jump lookup (get_addr_ht): the bin's two (vaddr, code offset)
+ * pairs in one 16-byte line, no ll_entry to chase. Every write to a hash_table bin ends in ht_sync(). */
+static struct ht_fast { u_int vaddr[2]; u_int off[2]; } ht_fast[65536];
+static void ht_sync(struct ll_entry **ht_bin)
+{
+  struct ht_fast *f=&ht_fast[(ht_bin-&hash_table[0][0])>>1];
+  int k;
+  for(k=0;k<2;k++) {
+    if(ht_bin[k]) { f->vaddr[k]=ht_bin[k]->vaddr; f->off[k]=(u_int)((uintptr_t)ht_bin[k]->addr-(uintptr_t)base_addr); }
+    else f->vaddr[k]=~0u;
+  }
+}
 static struct ll_entry *jump_in[4096];
 static struct ll_entry *jump_dirty[4096];
 static struct ll_entry *jump_out[4096];
@@ -1967,6 +1979,7 @@ static void remove_hash(u_int vaddr)
     ht_bin[0]=ht_bin[1];
     ht_bin[1]=NULL;
   }
+  ht_sync(ht_bin);
 }
 
 /**** Interpreted opcodes ****/
@@ -2667,6 +2680,7 @@ static void ll_kill_pointers(struct ll_entry *head,intptr_t addr,int shift)
       uintptr_t host_addr=(intptr_t)kill_pointer(head->addr);
       #if NEW_DYNAREC >= NEW_DYNAREC_ARM
         needs_clear_cache[(host_addr-(uintptr_t)base_addr)>>17]|=1<<(((host_addr-(uintptr_t)base_addr)>>12)&31);
+        clear_cache_pending=1;
       #else
         /* avoid unused variable warning */
         (void)host_addr;
@@ -2748,15 +2762,7 @@ static void *dynamic_linker_impl(void * src, u_int vaddr)
   head=get_clean(r4300,vaddr,~0);
   if(head!=NULL){
     void* src_rw=(void*)(((intptr_t)src-(intptr_t)base_addr_rx)+(intptr_t)base_addr);
-#if NEW_DYNAREC == NEW_DYNAREC_ARM64
-    //TODO: Avoid disabling link between blocks for conditional branches
-    int *ptr=(int*)src_rw;
-    if((*ptr&0xfc000000)==0x14000000) { //b
-      add_link(vaddr, add_pointer(src_rw,head->addr));
-    }
-#else
     add_link(vaddr, add_pointer(src_rw,head->addr));
-#endif
     return (void*)(((intptr_t)head->addr-(intptr_t)base_addr)+(intptr_t)base_addr_rx);
   }
 #endif
@@ -2770,6 +2776,7 @@ static void *dynamic_linker_impl(void * src, u_int vaddr)
   if(head!=NULL){
     ht_bin[1]=ht_bin[0];
     ht_bin[0]=head;
+    ht_sync(ht_bin);
     return (void*)(((intptr_t)head->addr-(intptr_t)base_addr)+(intptr_t)base_addr_rx);
   }
 #endif
@@ -2784,6 +2791,7 @@ static void *dynamic_linker_impl(void * src, u_int vaddr)
       ht_bin[1]=ht_bin[0];
       ht_bin[0]=head;
     }
+    ht_sync(ht_bin);
     return (void*)(((intptr_t)head->clean_addr-(intptr_t)base_addr)+(intptr_t)base_addr_rx);
   }
 
@@ -2814,15 +2822,7 @@ static void *dynamic_linker_ds_impl(void * src, u_int vaddr)
   head=get_clean(r4300,vaddr,~0);
   if(head!=NULL){
     void* src_rw=(void*)(((intptr_t)src-(intptr_t)base_addr_rx)+(intptr_t)base_addr);
-#if NEW_DYNAREC == NEW_DYNAREC_ARM64
-    //TODO: Avoid disabling link between blocks for conditional branches
-    int *ptr=(int*)src_rw;
-    if((*ptr&0xfc000000)==0x14000000) { //b
-      add_link(vaddr, add_pointer(src_rw,head->addr));
-    }
-#else
     add_link(vaddr, add_pointer(src_rw,head->addr));
-#endif
     return (void*)(((intptr_t)head->addr-(intptr_t)base_addr)+(intptr_t)base_addr_rx);
   }
 #endif
@@ -2836,6 +2836,7 @@ static void *dynamic_linker_ds_impl(void * src, u_int vaddr)
   if(head!=NULL){
     ht_bin[1]=ht_bin[0];
     ht_bin[0]=head;
+    ht_sync(ht_bin);
     return (void*)(((intptr_t)head->addr-(intptr_t)base_addr)+(intptr_t)base_addr_rx);
   }
 #endif
@@ -2850,6 +2851,7 @@ static void *dynamic_linker_ds_impl(void * src, u_int vaddr)
       ht_bin[1]=ht_bin[0];
       ht_bin[0]=head;
     }
+    ht_sync(ht_bin);
     return (void*)(((intptr_t)head->clean_addr-(intptr_t)base_addr)+(intptr_t)base_addr_rx);
   }
 
@@ -2883,6 +2885,7 @@ void *get_addr(u_int vaddr)
   if(head!=NULL){
     ht_bin[1]=ht_bin[0];
     ht_bin[0]=head;
+    ht_sync(ht_bin);
     return (void*)(((intptr_t)head->addr-(intptr_t)base_addr)+(intptr_t)base_addr_rx);
   }
 
@@ -2896,6 +2899,7 @@ void *get_addr(u_int vaddr)
       ht_bin[1]=ht_bin[0];
       ht_bin[0]=head;
     }
+    ht_sync(ht_bin);
     return (void*)(((intptr_t)head->clean_addr-(intptr_t)base_addr)+(intptr_t)base_addr_rx);
   }
 
@@ -2912,9 +2916,9 @@ void *get_addr(u_int vaddr)
 // Look up address in hash table first
 void *get_addr_ht(u_int vaddr)
 {
-  struct ll_entry **ht_bin=hash_table[((vaddr>>16)^vaddr)&0xFFFF];
-  if(ht_bin[0]&&ht_bin[0]->vaddr==vaddr) return (void *)(((intptr_t)ht_bin[0]->addr-(intptr_t)base_addr)+(intptr_t)base_addr_rx);
-  if(ht_bin[1]&&ht_bin[1]->vaddr==vaddr) return (void *)(((intptr_t)ht_bin[1]->addr-(intptr_t)base_addr)+(intptr_t)base_addr_rx);
+  const struct ht_fast *f=&ht_fast[((vaddr>>16)^vaddr)&0xFFFF];
+  if(f->vaddr[0]==vaddr) return (void *)((intptr_t)base_addr_rx+f->off[0]);
+  if(f->vaddr[1]==vaddr) return (void *)((intptr_t)base_addr_rx+f->off[1]);
   return get_addr(vaddr);
 }
 
@@ -2934,6 +2938,7 @@ void *get_addr_32(u_int vaddr,u_int flags)
       }else if(ht_bin[1]==NULL) {
         ht_bin[1]=head;
       }
+      ht_sync(ht_bin);
     }
     return (void*)(((intptr_t)head->addr-(intptr_t)base_addr)+(intptr_t)base_addr_rx);
   }
@@ -2946,6 +2951,7 @@ void *get_addr_32(u_int vaddr,u_int flags)
       }else if(ht_bin[1]==NULL) {
         ht_bin[1]=head;
       }
+      ht_sync(ht_bin);
      }
     return (void*)(((intptr_t)head->clean_addr-(intptr_t)base_addr)+(intptr_t)base_addr_rx);
   }
@@ -2983,10 +2989,12 @@ static void *check_addr(u_int vaddr)
       // Update existing entry with current address
       if(ht_bin[0]&&ht_bin[0]->vaddr==vaddr) {
         ht_bin[0]=head;
+        ht_sync(ht_bin);
         return head->addr;
       }
       if(ht_bin[1]&&ht_bin[1]->vaddr==vaddr) {
         ht_bin[1]=head;
+        ht_sync(ht_bin);
         return head->addr;
       }
       // Insert into hash table with low priority.
@@ -2997,6 +3005,7 @@ static void *check_addr(u_int vaddr)
       }else if(ht_bin[1]==NULL) {
         ht_bin[1]=head;
       }
+      ht_sync(ht_bin);
       return head->addr;
     }
   }
@@ -3024,6 +3033,7 @@ static void invalidate_page(u_int page)
       uintptr_t host_addr=(intptr_t)kill_pointer(head->addr);
     #if NEW_DYNAREC >= NEW_DYNAREC_ARM
       needs_clear_cache[(host_addr-(uintptr_t)base_addr)>>17]|=1<<(((host_addr-(uintptr_t)base_addr)>>12)&31);
+      clear_cache_pending=1;
     #else
       /* avoid unused variable warning */
       (void)host_addr;
@@ -3254,6 +3264,7 @@ void clean_blocks(u_int page)
                 if(ht_bin[1]&&ht_bin[1]->vaddr==head->vaddr) {
                   ht_bin[1]=clean_head; // Replace existing entry
                 }
+                ht_sync(ht_bin);
               }
             }
           }
@@ -8984,7 +8995,7 @@ void new_dynarec_init(void)
   for(n=0;n<2048;n++)
     page_inv_gen[n]=inv_gen;
   for(n=0;n<65536;n++)
-    hash_table[n][0]=hash_table[n][1]=NULL;
+    {hash_table[n][0]=hash_table[n][1]=NULL; ht_fast[n].vaddr[0]=ht_fast[n].vaddr[1]=~0u;}
   memset(g_dev.r4300.new_dynarec_hot_state.mini_ht,-1,sizeof(g_dev.r4300.new_dynarec_hot_state.mini_ht));
   memset(restore_candidate,0,sizeof(restore_candidate));
   copy_size=0;
@@ -12011,20 +12022,21 @@ static int new_recompile_block_impl(int addr)
       void *stub=out;
       void *addr=check_addr(link_addr[i][1]);
       emit_extjump(link_addr[i][0],link_addr[i][1]);
-#ifndef DISABLE_BLOCK_LINKING
 #if NEW_DYNAREC==NEW_DYNAREC_ARM64
-      //TODO: Avoid disabling link between blocks for conditional branches
-      u_char *ptr=(u_char *)link_addr[i][0];
-      if(addr&&((ptr[3]&0xfc)==0x14)) {
-#else
-      if(addr) {
+      set_jump_target(link_addr[i][0],(intptr_t)stub);
+#ifndef DISABLE_BLOCK_LINKING
+      if(addr) add_link(link_addr[i][1],add_pointer((void*)link_addr[i][0],addr)); // a b.cond site links through its stub
 #endif
+#else
+#ifndef DISABLE_BLOCK_LINKING
+      if(addr) {
         set_jump_target(link_addr[i][0],(intptr_t)addr);
         add_link(link_addr[i][1],stub);
       }
       else
 #endif
         set_jump_target(link_addr[i][0],(intptr_t)stub);
+#endif
     }
     else
     {
@@ -12075,6 +12087,7 @@ static int new_recompile_block_impl(int addr)
           if(ht_bin[1]&&ht_bin[1]->vaddr==vaddr) {
             ht_bin[1]=head;
           }
+          ht_sync(ht_bin);
         }
         else
         {
@@ -12171,6 +12184,7 @@ static int new_recompile_block_impl(int addr)
             ht_bin[0]=ht_bin[1];
             ht_bin[1]=NULL;
           }
+          ht_sync(ht_bin);
         }
         break;
       case 3:
