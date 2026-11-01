@@ -80,7 +80,7 @@ void poweron_rdp(struct rdp_core* dp)
     dp->dpc_regs[DPC_STATUS_REG] |= DPC_STATUS_START_GCLK;
 
     dp->do_on_unfreeze = 0;
-    dp->full_syncs_pending = 0;
+    dp->pending = 0;
 
     poweron_fb(&dp->fb);
 }
@@ -122,6 +122,7 @@ void write_dpc_regs(void* opaque, uint32_t address, uint32_t value, uint32_t mas
         unprotect_framebuffers(&dp->fb);
         gfx.processRDPList();
         protect_framebuffers(&dp->fb);
+        rdp_full_sync_discard(dp);
         signal_rcp_interrupt(dp->mi, MI_INTR_DP);
         break;
     }
@@ -156,10 +157,11 @@ void rdp_interrupt_event(void* opaque)
 
     if (gfx.fullSyncDelivered) gfx.fullSyncDelivered();     /* the frame must be drawn when the game learns it is */
     raise_rcp_interrupt(dp->mi, MI_INTR_DP);
-    if (dp->full_syncs_pending != 0) {
-        --dp->full_syncs_pending;
+    if (dp->pending != 0) {
+        uint32_t d = dp->pending_delay[0];
+        memmove(dp->pending_delay, dp->pending_delay + 1, --dp->pending * sizeof(dp->pending_delay[0]));
         cp0_update_count(dp->mi->r4300);
-        add_interrupt_event(&dp->mi->r4300->cp0, DP_INT, dp->full_sync_delay ? dp->full_sync_delay : 4000);
+        add_interrupt_event(&dp->mi->r4300->cp0, DP_INT, d);
     }
 }
 
@@ -168,14 +170,40 @@ void set_rdp_full_sync_delay(struct rdp_core* dp, uint32_t cycles)
     dp->full_sync_delay = cycles;
 }
 
+void set_rdp_clock_scale(struct rdp_core* dp, uint32_t permille)
+{
+    dp->clock_scale = permille;
+}
+
+/* the delay of the DP interrupt of the full sync(s) that just completed: the plugin's estimate of the RDP's time, or the fixed delay; at most 4 VIs */
+static uint32_t full_sync_delay_now(struct rdp_core* dp)
+{
+    if (dp->clock_scale && gfx.rdpSyncClocks) {
+        uint64_t d = (uint64_t)gfx.rdpSyncClocks() * 3 * dp->clock_scale / 4000;
+        return d < 4000 ? 4000 : d > 3200000 ? 3200000 : (uint32_t)d;
+    }
+    return dp->full_sync_delay ? dp->full_sync_delay : 4000;
+}
+
 void rdp_full_sync_done(struct rdp_core* dp)
 {
     struct cp0* cp0 = &dp->mi->r4300->cp0;
+    uint32_t d = full_sync_delay_now(dp);
     if (get_event(&cp0->q, DP_INT)) {
-        ++dp->full_syncs_pending;
+        if (dp->pending < sizeof(dp->pending_delay) / sizeof(dp->pending_delay[0]))
+            dp->pending_delay[dp->pending++] = d;
+        else
+            dp->pending_delay[dp->pending - 1] += d;
         return;
     }
     cp0_update_count(dp->mi->r4300);
-    add_interrupt_event(cp0, DP_INT, dp->full_sync_delay ? dp->full_sync_delay : 4000);
+    add_interrupt_event(cp0, DP_INT, d);
+}
+
+void rdp_full_sync_discard(struct rdp_core* dp)
+{
+    (void)dp;
+    if (gfx.rdpSyncClocks)
+        gfx.rdpSyncClocks();
 }
 

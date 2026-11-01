@@ -87,7 +87,9 @@ struct rdp_core
     uint32_t dps_regs[DPS_REGS_COUNT];
     unsigned char do_on_unfreeze;
     uint32_t full_sync_delay;      /* cycles from the end of a graphics task to its DP interrupt (set_rdp_full_sync_delay) */
-    uint32_t full_syncs_pending;   /* full syncs that completed while a DP interrupt was already queued: each gets its own interrupt, full_sync_delay after the previous */
+    uint32_t clock_scale;          /* the DP interrupt after the plugin's RDP clock estimate times this / 1000 (set_rdp_clock_scale; 0 = full_sync_delay) */
+    uint32_t pending_delay[8];     /* full syncs that completed while a DP interrupt was already queued: each gets its own interrupt, its delay after the previous */
+    uint32_t pending;
 
     struct fb fb;
 
@@ -125,7 +127,12 @@ void rdp_interrupt_event(void* opaque);
 /* the delay (CPU cycles) between the end of a graphics task that ends in a full sync and its DP interrupt; 0 = upstream's 4000. Stands in for the RDP's
  * drawing time, which a game that starts its next frame when the last one is drawn paces itself by (Core[RdpFullSyncDelay]) */
 void set_rdp_full_sync_delay(struct rdp_core* dp, uint32_t cycles);
+/* with a video plugin that estimates the RDP's time (RdpSyncClocks), the DP interrupt comes that estimate (in RDP clocks, 3/4 of a count cycle each) times
+ * permille / 1000 after the task instead of full_sync_delay; 0 = full_sync_delay (Core[RdpClockScale]) */
+void set_rdp_clock_scale(struct rdp_core* dp, uint32_t permille);
 /* a graphics task ended in a full sync: queue its DP interrupt (one per full sync, serialised like the RDP) */
 void rdp_full_sync_done(struct rdp_core* dp);
+/* a full sync whose interrupt is not scheduled here (CPU-written lists, a frozen RDP): its estimate is not the next task's */
+void rdp_full_sync_discard(struct rdp_core* dp);
 
 #endif

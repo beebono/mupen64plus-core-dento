@@ -202,6 +202,9 @@ typedef void (*ptr_ResizeVideoOutput)(int width, int height);
 /* optional (core-dento): called on the emulation thread just before a DP (full sync) interrupt is delivered, so a plugin that renders
  * behind SYNC_FULL can finish the frame the game is about to look at */
 typedef void (*ptr_FullSyncDelivered)(void);
+/* optional (core-dento): the RDP clocks the plugin estimates for the commands before the full syncs since the last call (0 when it has none); read when a graphics
+ * task ends in a full sync, its DP interrupt comes that long after (Core[RdpClockScale]) */
+typedef unsigned int (*ptr_RdpSyncClocks)(void);
 #if defined(M64P_PLUGIN_PROTOTYPES)
 EXPORT void CALL ChangeWindow(void);
 EXPORT int  CALL InitiateGFX(GFX_INFO Gfx_Info);
@@ -216,6 +219,7 @@ EXPORT void CALL ReadScreen2(void *dest, int *width, int *height, int front);
 EXPORT void CALL SetRenderingCallback(void (*callback)(int));
 EXPORT void CALL ResizeVideoOutput(int width, int height);
 EXPORT void CALL FullSyncDelivered(void);
+EXPORT unsigned int CALL RdpSyncClocks(void);
 #endif
 
 /* frame buffer plugin spec extension */

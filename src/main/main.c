@@ -126,6 +126,8 @@ static int   l_FrameAdvance = 0;         // variable to check if we pause on nex
 static int   l_MainSpeedLimit = 1;       // insert delay during vi_interrupt to keep speed at real-time
 static uint32_t l_FullSyncDelayMin = 0;  // Core[RdpFullSyncDelay] / Core[RdpFullSyncDelayMax]: the range adapt_full_sync_delay moves in
 static uint32_t l_FullSyncDelayMax = 0;
+static uint32_t l_ClockScaleMin = 0;     // Core[RdpClockScale] / Core[RdpClockScaleMax] in permille: the range when the video plugin estimates the RDP's time
+static uint32_t l_ClockScaleMax = 0;
 
 static osd_message_t *l_msgVol = NULL;
 static osd_message_t *l_msgFF = NULL;
@@ -433,6 +435,8 @@ int main_set_core_defaults(void)
     ConfigSetDefaultInt(g_CoreConfig, "RspGfxTaskDelay", 0, "Cycles between the end of a graphics task and its SP interrupt (0 = 1000, upstream). Experimental: above 32000 the Rare games (Conker, Jet Force Gemini) stop rendering");
     ConfigSetDefaultInt(g_CoreConfig, "RdpFullSyncDelay", 600000, "Cycles between the end of a graphics task and its DP (full sync) interrupt; 0 = 4000, upstream. Stands in for the RDP's drawing time, which a game that starts a frame when the last one is drawn paces itself by (Gauntlet Legends)");
     ConfigSetDefaultInt(g_CoreConfig, "RdpFullSyncDelayMax", 900000, "The delay rises towards this while the emulator is behind real time (the game then draws fewer frames instead of slowing down) and falls back when it has slack; <= RdpFullSyncDelay = fixed. A 60 fps game loses frames above one VI (811000 NTSC), but only while it is behind anyway");
+    ConfigSetDefaultInt(g_CoreConfig, "RdpClockScale", 250, "With a video plugin that estimates the RDP's drawing time per frame (foir), the DP interrupt comes this many percent of the estimate after the graphics task, instead of RdpFullSyncDelay; 0 = RdpFullSyncDelay always. The estimate is pixels and setup only (no memory stalls), hence above 100");
+    ConfigSetDefaultInt(g_CoreConfig, "RdpClockScaleMax", 400, "The scale rises towards this while the emulator is behind real time and falls back when it has slack, like RdpFullSyncDelay; RdpFullSyncDelayMax <= RdpFullSyncDelay turns both fixed");
     ConfigSetDefaultInt(g_CoreConfig, "RspResumeDelay", 262144, "Cycles before a graphics task the RSP plugin left unfinished (waiting for the CPU) is resumed on the next SP status write; 0 = 1000, the delay of a finished task's interrupt");
     ConfigSetDefaultBool(g_CoreConfig, "AutoStateSlotIncrement", 0, "Increment the save state slot after each save operation");
     ConfigSetDefaultInt(g_CoreConfig, "CurrentStateSlot", 0, "Save state slot (0-9) to use when saving/loading the emulator state");
@@ -968,30 +972,37 @@ void new_frame(void)
     }
 }
 
-/* The RDP's stand-in drawing time (Core[RdpFullSyncDelay], rdp_core.h) follows the load: while the emulator is behind real time it rises
- * 4000 a VI towards the maximum (a game that paces itself by the full sync then draws fewer frames, as it did on a console that was
- * too slow for it, instead of running in slow motion); it falls back by 20000 a second of VIs that all had slack. A game that keeps up
- * never sees more than the minimum. Off while fast-forwarding, and when Max <= Min (the equivalence runs: the delay would depend on
+/* The RDP's stand-in drawing time (Core[RdpFullSyncDelay], or Core[RdpClockScale] times the video plugin's estimate, rdp_core.h) follows
+ * the load: while the emulator is behind real time it rises a 75th of the range a VI towards the maximum (a game that paces itself by
+ * the full sync then draws fewer frames, as it did on a console that was too slow for it, instead of running in slow motion); it falls
+ * back by a 15th of it a second of VIs that all had slack (the delay: 4000 up, 20000 down). A game that keeps up never sees more than the
+ * minimum. Off while fast-forwarding, and when RdpFullSyncDelayMax <= RdpFullSyncDelay (the equivalence runs: the delay would depend on
  * the wall clock). */
 static void adapt_full_sync_delay(double sleepTime)
 {
     static unsigned int n = 0, slack = 0, behind = 0;
-    uint32_t d = g_dev.dp.full_sync_delay;
-    if (!l_MainSpeedLimit || l_SpeedFactor != 100 || l_FullSyncDelayMax <= l_FullSyncDelayMin)
+    int model = g_dev.dp.clock_scale && gfx.rdpSyncClocks;
+    uint32_t lo = model ? l_ClockScaleMin : l_FullSyncDelayMin, hi = model ? l_ClockScaleMax : l_FullSyncDelayMax;
+    uint32_t v = model ? g_dev.dp.clock_scale : g_dev.dp.full_sync_delay, up, down;
+    if (!l_MainSpeedLimit || l_SpeedFactor != 100 || l_FullSyncDelayMax <= l_FullSyncDelayMin || hi <= lo)
         return;
+    up = (hi - lo) / 75 ? (hi - lo) / 75 : 1;
+    down = (hi - lo) / 15 ? (hi - lo) / 15 : 1;
     if (sleepTime < -2.0) {
         ++behind;
-        d = (d + 4000 < l_FullSyncDelayMax) ? d + 4000 : l_FullSyncDelayMax;
+        v = (v + up < hi) ? v + up : hi;
     } else if (sleepTime > 0.0) {
         ++slack;
     }
     if (++n >= 60) {
         if (behind == 0 && slack >= 54)
-            d = (d > l_FullSyncDelayMin + 20000) ? d - 20000 : l_FullSyncDelayMin;
+            v = (v > lo + down) ? v - down : lo;
         n = slack = behind = 0;
     }
-    if (d != g_dev.dp.full_sync_delay)
-        set_rdp_full_sync_delay(&g_dev.dp, d);
+    if (model && v != g_dev.dp.clock_scale)
+        set_rdp_clock_scale(&g_dev.dp, v);
+    else if (!model && v != g_dev.dp.full_sync_delay)
+        set_rdp_full_sync_delay(&g_dev.dp, v);
 }
 
 static void apply_speed_limiter(void)
@@ -1674,6 +1685,8 @@ m64p_error main_run(void)
     rdp_full_sync_delay = ConfigGetParamInt(g_CoreConfig, "RdpFullSyncDelay");
     l_FullSyncDelayMin = rdp_full_sync_delay ? rdp_full_sync_delay : 4000;
     l_FullSyncDelayMax = ConfigGetParamInt(g_CoreConfig, "RdpFullSyncDelayMax");
+    l_ClockScaleMin = ConfigGetParamInt(g_CoreConfig, "RdpClockScale") * 10;
+    l_ClockScaleMax = ConfigGetParamInt(g_CoreConfig, "RdpClockScaleMax") * 10;
 
     if (ROM_SETTINGS.disableextramem)
         disable_extra_mem = ROM_SETTINGS.disableextramem;
@@ -1966,6 +1979,7 @@ m64p_error main_run(void)
     set_rsp_resume_delay(&g_dev.sp, rsp_resume_delay);
     set_rsp_gfx_task_delay(&g_dev.sp, rsp_gfx_task_delay);
     set_rdp_full_sync_delay(&g_dev.dp, rdp_full_sync_delay);
+    set_rdp_clock_scale(&g_dev.dp, l_ClockScaleMin);
 
     // Attach rom to plugins
     failure_rval = M64ERR_PLUGIN_FAIL;

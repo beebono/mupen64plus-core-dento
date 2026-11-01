@@ -363,6 +363,7 @@ void do_SP_Task(struct rsp_core* sp)
             sp->mi->regs[MI_INTR_REG] &= ~MI_INTR_DP;
             if (sp->dp->dpc_regs[DPC_STATUS_REG] & DPC_STATUS_FREEZE) {
                 sp->dp->do_on_unfreeze |= DELAY_DP_INT;
+                rdp_full_sync_discard(sp->dp);
             } else {
                 rdp_full_sync_done(sp->dp);
             }
